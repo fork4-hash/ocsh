@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-
+#include "builtins.h"
 #define MAX_LINE 1024
 #define MAX_ARGS 64
 #define MAX_STAGES 16
@@ -39,10 +39,9 @@ static int split_stages(char *line, char **stages, int max_stages) {
     }
     return count;
 }
-
 int main(void) {
     char command[MAX_LINE];
-
+    init_aliases();
     while (1) {
         printf("ocsh> ");
         fflush(stdout);
@@ -68,12 +67,26 @@ int main(void) {
         if (argc == 0) {
             continue;
         }
+        char cmd_alias[MAX_LINE];
+        char *args_alias[MAX_ARGS];
+        char **args = argv;
 
-        if (strcmp(argv[0], "quit") == 0) {
+        if (resoudre_alias(args, cmd_alias, sizeof(cmd_alias))) {
+            int n = split_args(cmd_alias, args_alias, MAX_ARGS);
+            if (n > 0) {
+                args = args_alias;
+            }
+        }
+        if (strcmp(args[0], "quit") == 0) {
             printf("Fermeture d'ocsh...\n");
             break;
         }
-
+        if (executer_builtin(args)) {
+            continue;
+        }
+        if (gerer_redirections(args)) {
+            continue;
+        }
         /* Note : num_stages > 1 sera câblé avec pipe() au Jalon 3 */
         if (num_stages > 1) {
             printf("Info : %d étapes détectées avec '->' (câblage pipe au jalon 3)\n", num_stages);
@@ -85,7 +98,7 @@ int main(void) {
             perror("Erreur lors du fork");
             continue;
         } else if (pid == 0) {
-            execvp(argv[0], argv);
+            execvp(args[0], args);
             perror("ocsh: commande introuvable");
             _exit(1);
         } else {
@@ -94,4 +107,4 @@ int main(void) {
     }
 
     return 0;
-}
+    }
