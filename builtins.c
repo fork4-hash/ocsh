@@ -3,15 +3,15 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/wait.h>
 #include "builtins.h"
 
 static Alias table_aliases[MAX_ALIASES];
 static int nb_aliases = 0;
 
-void init_aliases(void) {
-    nb_aliases = 0;
-}
+static char historique[MAX_HISTORY][MAX_ALIAS_LEN];
+static int nb_historique = 0;
 
 static void ajouter_ou_modifier_alias(const char *nom, const char *cmd) {
     for (int i = 0; i < nb_aliases; i++) {
@@ -32,31 +32,42 @@ static void ajouter_ou_modifier_alias(const char *nom, const char *cmd) {
     }
 }
 
-static void lister_aliases(void) {
-    if (nb_aliases == 0) {
-        printf("Aucun alias défini.\n");
+void init_aliases(void) {
+    nb_aliases = 0;
+    ajouter_ou_modifier_alias("list", "ls");
+    ajouter_ou_modifier_alias("show", "cat");
+    ajouter_ou_modifier_alias("copy", "cp");
+    ajouter_ou_modifier_alias("move", "mv");
+    ajouter_ou_modifier_alias("del", "rm");
+    ajouter_ou_modifier_alias("newdir", "mkdir");
+    ajouter_ou_modifier_alias("newfile", "touch");
+}
+
+void enregistrer_historique(const char *ligne) {
+    if (ligne == NULL || ligne[0] == '\0') {
         return;
     }
-    for (int i = 0; i < nb_aliases; i++) {
-        printf("%s='%s'\n", table_aliases[i].nom, table_aliases[i].commande);
+    if (nb_historique < MAX_HISTORY) {
+        strncpy(historique[nb_historique], ligne, MAX_ALIAS_LEN - 1);
+        historique[nb_historique][MAX_ALIAS_LEN - 1] = '\0';
+        nb_historique++;
+    } else {
+        for (int i = 1; i < MAX_HISTORY; i++) {
+            strcpy(historique[i - 1], historique[i]);
+        }
+        strncpy(historique[MAX_HISTORY - 1], ligne, MAX_ALIAS_LEN - 1);
+        historique[MAX_HISTORY - 1][MAX_ALIAS_LEN - 1] = '\0';
     }
 }
 
-static void afficher_alias(const char *nom) {
-    for (int i = 0; i < nb_aliases; i++) {
-        if (strcmp(table_aliases[i].nom, nom) == 0) {
-            printf("%s='%s'\n", table_aliases[i].nom, table_aliases[i].commande);
-            return;
-        }
+static void afficher_historique(void) {
+    for (int i = 0; i < nb_historique; i++) {
+        printf("%d  %s\n", i + 1, historique[i]);
     }
-    fprintf(stderr, "ocsh: show: alias '%s' introuvable\n", nom);
 }
 
 int resoudre_alias(char **args, char *buffer_cmd, size_t taille_buffer) {
-    if (args[0] == NULL) {
-        return 0;
-    }
-    if (strcmp(args[0], "show") == 0) {
+    if (args == NULL || args[0] == NULL) {
         return 0;
     }
     for (int i = 0; i < nb_aliases; i++) {
@@ -73,7 +84,7 @@ int resoudre_alias(char **args, char *buffer_cmd, size_t taille_buffer) {
 }
 
 int executer_builtin(char **args) {
-    if (args[0] == NULL) {
+    if (args == NULL || args[0] == NULL) {
         return 1;
     }
 
@@ -92,17 +103,41 @@ int executer_builtin(char **args) {
         return 1;
     }
 
-    if (strcmp(args[0], "list") == 0) {
-        lister_aliases();
+    if (strcmp(args[0], "path") == 0) {
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            printf("%s\n", cwd);
+        } else {
+            perror("ocsh: path");
+        }
         return 1;
     }
 
-    if (strcmp(args[0], "show") == 0) {
-        if (args[1] == NULL) {
-            fprintf(stderr, "Usage: show <nom_alias>\n");
-        } else {
-            afficher_alias(args[1]);
+    if (strcmp(args[0], "say") == 0) {
+        for (int i = 1; args[i] != NULL; i++) {
+            if (i > 1) {
+                printf(" ");
+            }
+            printf("%s", args[i]);
         }
+        printf("\n");
+        return 1;
+    }
+
+    if (strcmp(args[0], "osinfo") == 0) {
+        printf("Systèmes d'Exploitation -- UIR/ESIN\n");
+        return 1;
+    }
+
+    if (strcmp(args[0], "info") == 0) {
+        printf("Builtins : go, quit, path, say, info, past, osinfo, alias\n");
+        printf("Alias    : list (ls), show (cat), copy (cp), move (mv), del (rm), newdir (mkdir), newfile (touch)\n");
+        printf("Ops      : >, >>, <, -> (pipe), & (arriere-plan)\n");
+        return 1;
+    }
+
+    if (strcmp(args[0], "past") == 0) {
+        afficher_historique();
         return 1;
     }
 
@@ -128,13 +163,19 @@ int executer_builtin(char **args) {
 int gerer_redirections(char **args) {
     char *fichier_in = NULL;
     char *fichier_out = NULL;
+    int append_mode = 0;
     char *cmd_args[64];
     int idx = 0;
     int a_redirection = 0;
 
     for (int i = 0; args[i] != NULL; i++) {
-        if (strcmp(args[i], ">") == 0 && args[i + 1] != NULL) {
+        if (strcmp(args[i], ">>") == 0 && args[i + 1] != NULL) {
             fichier_out = args[++i];
+            append_mode = 1;
+            a_redirection = 1;
+        } else if (strcmp(args[i], ">") == 0 && args[i + 1] != NULL) {
+            fichier_out = args[++i];
+            append_mode = 0;
             a_redirection = 1;
         } else if (strcmp(args[i], "<") == 0 && args[i + 1] != NULL) {
             fichier_in = args[++i];
@@ -171,13 +212,14 @@ int gerer_redirections(char **args) {
         }
 
         if (fichier_out != NULL) {
-            int fd_out = open(fichier_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int flags = O_WRONLY | O_CREAT | (append_mode ? O_APPEND : O_TRUNC);
+            int fd_out = open(fichier_out, flags, 0644);
             if (fd_out < 0) {
-                perror("ocsh: open (>)");
+                perror("ocsh: open (>/>>)");
                 exit(1);
             }
             if (dup2(fd_out, STDOUT_FILENO) < 0) {
-                perror("ocsh: dup2 (>)");
+                perror("ocsh: dup2 (>/>>)");
                 close(fd_out);
                 exit(1);
             }
