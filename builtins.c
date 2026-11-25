@@ -4,6 +4,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 #include <sys/wait.h>
 #include "builtins.h"
 
